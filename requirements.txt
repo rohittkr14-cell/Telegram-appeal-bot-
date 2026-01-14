@@ -1,0 +1,102 @@
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, ConversationHandler
+
+BOT_TOKEN = "8596725431:AAGoibvA8sQyIBcimHiheule9SzrWCa9QAg"
+GROUP_ID = -1002800563919   # Your group ID
+ADMIN_IDS = [7659864091 , 6587658540]     # Your Telegram ID
+
+ASK_REASON = 1  # Conversation state
+
+user_data = {}
+
+# Start command → show Appeal button
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.chat.type != 'private':
+        return
+
+    keyboard = [[InlineKeyboardButton("📝 Submit Appeal", callback_data="appeal")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Welcome to the Appeal Bot.\nClick the button below to submit your appeal:", reply_markup=reply_markup)
+
+# Handle button tap
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "appeal":
+        await query.edit_message_text("Please send your appeal reason:")
+        return ASK_REASON
+
+# Handle user sending the reason
+async def appeal_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+
+    # Check if user is banned
+    try:
+        member = await context.bot.get_chat_member(GROUP_ID, user.id)
+        if member.status != "kicked":
+            await update.message.reply_text("❌ You are not banned, so you cannot submit an appeal.")
+            return ConversationHandler.END
+    except:
+        # If bot cannot find the member, assume banned
+        pass
+
+    reason = update.message.text
+    user_data[user.id] = user.username
+
+    # Send to admins
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Approve", callback_data=f"approve_{user.id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"reject_{user.id}")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    for admin in ADMIN_IDS:
+        await context.bot.send_message(
+            admin,
+            f"📩 New Appeal\n\nUser: @{user.username}\nID: {user.id}\n\nReason:\n{reason}",
+            reply_markup=reply_markup
+        )
+
+    await update.message.reply_text("✅ Your appeal has been submitted successfully. We will notify you once reviewed.")
+    return ConversationHandler.END
+
+# Admin buttons Approve/Reject
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    action, user_id = data.split("_")
+    user_id = int(user_id)
+
+    if action == "approve":
+        try:
+            await context.bot.unban_chat_member(GROUP_ID, user_id)
+            await query.edit_message_text("✅ User unbanned successfully.")
+            await context.bot.send_message(user_id, "✅ Your appeal was approved. You have been unbanned.")
+        except:
+            await query.edit_message_text("⚠️ Bot must be admin in the group.")
+
+    if action == "reject":
+        await query.edit_message_text("❌ Appeal rejected.")
+        await context.bot.send_message(user_id, "❌ Your appeal was rejected.")
+
+# Conversation handler for appeal flow
+conv_handler = ConversationHandler(
+    entry_points=[CallbackQueryHandler(button, pattern="^appeal$")],
+    states={
+        ASK_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, appeal_reason)]
+    },
+    fallbacks=[]
+)
+
+app = Application.builder().token(BOT_TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(conv_handler)
+app.add_handler(CallbackQueryHandler(buttons, pattern="^(approve|reject)_"))
+
+app.run_polling()
